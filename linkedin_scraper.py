@@ -724,7 +724,7 @@ def _merge_urls_from_dom(experience_entries, company_links):
             entry["company_linkedin_url"] = name_to_url[comp]
             continue
 
-        # 2. Substring match (either direction)
+        # 2. Substring match (either direction) on link text
         matched = False
         for dname, durl in name_to_url.items():
             if dname in comp or comp in dname:
@@ -734,10 +734,34 @@ def _merge_urls_from_dom(experience_entries, company_links):
         if matched:
             continue
 
-        # 3. Slug match: "Google" matches slug "google"
-        for word in comp.replace(",", "").replace(".", "").split():
-            if word in slug_to_url:
-                entry["company_linkedin_url"] = slug_to_url[word]
+        # 3. Slug match — compare company name against URL slugs
+        #    e.g. "Meta Platforms" should match slug "meta-platforms"
+        comp_clean = comp.replace(",", "").replace(".", "").replace("&", "and")
+        comp_words = comp_clean.split()
+        comp_as_slug = "-".join(comp_words)  # "meta platforms" -> "meta-platforms"
+
+        for slug, surl in slug_to_url.items():
+            slug_parts = slug.split("-")
+            # Check: full slug match ("meta-platforms" == "meta-platforms")
+            if comp_as_slug == slug:
+                entry["company_linkedin_url"] = surl
+                matched = True
+                break
+            # Check: any company word is the slug or starts the slug
+            for word in comp_words:
+                if word == slug or slug.startswith(word + "-") or slug.startswith(word):
+                    entry["company_linkedin_url"] = surl
+                    matched = True
+                    break
+            if matched:
+                break
+            # Check: any slug part matches a company word
+            for sp in slug_parts:
+                if sp in comp_words:
+                    entry["company_linkedin_url"] = surl
+                    matched = True
+                    break
+            if matched:
                 break
 
 
