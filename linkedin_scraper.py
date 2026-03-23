@@ -336,63 +336,6 @@ def extract_experience_links(session):
         return []
 
 
-def extract_activity_timestamps(session):
-    """Extract precise timestamps from recent activity via DOM <time> elements."""
-    js_code = """
-    (function() {
-        var results = [];
-        // LinkedIn activity items often contain <time> elements with datetime attributes
-        // Look in the recent activity / main feed section
-        var activitySection = document.querySelector('div.pvs-list__container') ||
-                              document.querySelector('section.pv-recent-activity-section');
-
-        // Broader search: find all time elements near activity indicators
-        var timeEls = document.querySelectorAll('time[datetime]');
-        for (var i = 0; i < timeEls.length; i++) {
-            var el = timeEls[i];
-            var datetime = el.getAttribute('datetime');
-            var displayText = el.textContent.trim();
-
-            // Try to find what type of activity this is
-            var container = el.closest('li') || el.closest('div[data-urn]') || el.parentElement;
-            var activityType = '';
-            if (container) {
-                var text = container.textContent.toLowerCase();
-                if (text.includes('reposted') || text.includes('repost')) {
-                    activityType = 'repost';
-                } else if (text.includes('liked') || text.includes('likes')) {
-                    activityType = 'like';
-                } else if (text.includes('commented')) {
-                    activityType = 'comment';
-                } else if (text.includes('posted') || text.includes('shared')) {
-                    activityType = 'post';
-                } else if (text.includes('celebrated') || text.includes('congrat')) {
-                    activityType = 'celebration';
-                }
-            }
-
-            if (datetime) {
-                results.push({
-                    type: activityType || 'unknown',
-                    datetime: datetime,
-                    display_text: displayText
-                });
-            }
-        }
-        return JSON.stringify(results);
-    })()
-    """
-    result = session.send("Runtime.evaluate", {
-        "expression": js_code,
-        "returnByValue": True,
-    })
-    value = result.get("result", {}).get("value", "[]")
-    try:
-        return json.loads(value)
-    except (json.JSONDecodeError, TypeError):
-        return []
-
-
 def extract_profile_via_extension(session):
     """
     Execute the content script's extraction function directly via CDP's
@@ -525,7 +468,8 @@ def analyze_with_claude(screenshot_path):
                             "- profile_url: the LinkedIn URL if visible\n"
                             "- recent_activity: list of recent activity entries, each with "
                             "only 'type' (e.g. 'repost', 'post', 'like', 'comment') and "
-                            "'when' (the exact text shown on screen, e.g. '1w', '3d', '2mo')\n"
+                            "'when' expanded to human-readable form (e.g. '1w' means '1 week', "
+                            "'3d' means '3 days', '2mo' means '2 months', '5h' means '5 hours')\n"
                             "- any other useful fields you can identify\n\n"
                             "IGNORE: Do NOT include suggested/recommended profiles, "
                             "'People also viewed', 'People you may know' sections, "
@@ -729,9 +673,6 @@ def scrape_profile(url):
         dom_data = extract_profile_via_extension(session)
         print(f"DOM extraction found {len(dom_data)} fields")
 
-        # Extract precise activity timestamps from DOM <time> elements
-        activity_timestamps = extract_activity_timestamps(session)
-        print(f"Found {len(activity_timestamps)} activity timestamps from DOM")
 
         # Capture screenshot
         slug = re.sub(r'[^a-zA-Z0-9]', '_', url.split("linkedin.com/")[-1].strip("/"))
@@ -771,9 +712,6 @@ def scrape_profile(url):
     if "experience" in experience_data:
         profile_data["experience"] = experience_data["experience"]
 
-    # Override recent_activity with precise DOM timestamps if available
-    if activity_timestamps:
-        profile_data["recent_activity"] = activity_timestamps
 
     # Add metadata
     profile_data["_source_url"] = url
