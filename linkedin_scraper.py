@@ -202,6 +202,45 @@ def capture_screenshot(session):
     return base64.b64decode(result["data"])
 
 
+def check_login_wall(session):
+    """Check if the current page is a LinkedIn login/sign-in wall.
+
+    Returns a string describing the issue, or None if the page looks fine.
+    """
+    js_code = """
+    (function() {
+        var url = window.location.href;
+
+        // URL-based detection
+        if (url.includes('/login') || url.includes('/signin') ||
+            url.includes('/authwall') || url.includes('/checkpoint')) {
+            return 'redirect:' + url;
+        }
+
+        // DOM-based detection: look for the sign-in form
+        if (document.querySelector('form.login__form') ||
+            document.querySelector('#username[name="session_key"]') ||
+            document.querySelector('input[name="session_key"]')) {
+            return 'login-form';
+        }
+
+        // Auth-wall overlay
+        if (document.querySelector('.authwall-join-form') ||
+            document.querySelector('[data-tracking-control-name="auth_wall"]')) {
+            return 'auth-wall';
+        }
+
+        return '';
+    })()
+    """
+    result = session.send("Runtime.evaluate", {
+        "expression": js_code,
+        "returnByValue": True,
+    })
+    value = result.get("result", {}).get("value", "")
+    return value if value else None
+
+
 def scroll_to_experience(session):
     """Scroll the page so the Experience section is visible."""
     js_code = """
@@ -668,10 +707,33 @@ def scrape_profile(url):
         # Navigate to the profile
         navigate_and_wait(session, url, wait_seconds=2)
 
+        # Check if we hit a login wall
+        login_issue = check_login_wall(session)
+        if login_issue:
+            print(f"\nError: LinkedIn is requiring sign-in ({login_issue}).")
+            print("You are not logged in or your session has expired.")
+            print("Please run the login command first:\n")
+            print("    python3 linkedin_scraper.py --login\n")
+            session.close()
+            return None
+
         # Extract profile data from the DOM via CDP Runtime.evaluate
         print("Extracting profile data from page DOM...")
         dom_data = extract_profile_via_extension(session)
         print(f"DOM extraction found {len(dom_data)} fields")
+
+        # Validate we got meaningful data (not a blank or error page)
+        has_name = bool(dom_data.get("name"))
+        has_profile_url = bool(dom_data.get("profile_url", ""))
+        is_linkedin_profile = "linkedin.com" in dom_data.get("profile_url", "")
+        if not has_name and not (has_profile_url and is_linkedin_profile):
+            print("\nError: Could not extract profile data from the page.")
+            print("The page may not have loaded correctly, or the URL may be invalid.")
+            print(f"  URL requested: {url}")
+            print(f"  Page URL seen: {dom_data.get('profile_url', 'unknown')}")
+            print("\nNo data was saved.")
+            session.close()
+            return None
 
 
         # Capture screenshot
@@ -790,7 +852,9 @@ def main():
         print("Error: URL must be a LinkedIn URL")
         sys.exit(1)
 
-    scrape_profile(args.url)
+    result = scrape_profile(args.url)
+    if result is None:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
