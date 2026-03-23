@@ -333,6 +333,9 @@ def analyze_with_claude(screenshot_path):
                             "- website: any website URLs shown\n"
                             "- profile_url: the LinkedIn URL if visible\n"
                             "- any other useful fields you can identify\n\n"
+                            "IGNORE: Do NOT include suggested/recommended profiles, "
+                            "'People also viewed', 'People you may know' sections, "
+                            "or messaging availability status.\n\n"
                             "Return ONLY valid JSON, no markdown fences or extra text."
                         ),
                     },
@@ -446,6 +449,14 @@ def scrape_profile(url):
             ws_url = tab_info["webSocketDebuggerUrl"]
 
         session = cdp_connect(ws_url)
+
+        # Set a larger viewport so the screenshot captures more content
+        session.send("Emulation.setDeviceMetricsOverride", {
+            "width": 1920,
+            "height": 1080,
+            "deviceScaleFactor": 1,
+            "mobile": False,
+        })
 
         # Navigate to the profile
         navigate_and_wait(session, url, wait_seconds=5)
