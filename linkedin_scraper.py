@@ -332,10 +332,14 @@ def analyze_with_claude(screenshot_path):
                             "- education: list of visible education entries\n"
                             "- website: any website URLs shown\n"
                             "- profile_url: the LinkedIn URL if visible\n"
+                            "- recent_activity: list of recent activity entries, each with "
+                            "only 'type' (e.g. 'repost', 'post', 'like', 'comment') and "
+                            "'when' (e.g. '1 week ago', '3 days ago')\n"
                             "- any other useful fields you can identify\n\n"
                             "IGNORE: Do NOT include suggested/recommended profiles, "
                             "'People also viewed', 'People you may know' sections, "
-                            "or messaging availability status.\n\n"
+                            "messaging availability status, posts_count, or counts of "
+                            "comments/videos/images available.\n\n"
                             "Return ONLY valid JSON, no markdown fences or extra text."
                         ),
                     },
