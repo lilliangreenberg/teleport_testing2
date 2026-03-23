@@ -498,8 +498,9 @@ def analyze_with_claude(screenshot_path):
                             "- profile_url: the LinkedIn URL if visible\n"
                             "- recent_activity: list of recent activity entries, each with "
                             "only 'type' (e.g. 'repost', 'post', 'like', 'comment') and "
-                            "'when' expanded to human-readable form (e.g. '1w' means '1 week', "
-                            "'3d' means '3 days', '2mo' means '2 months', '5h' means '5 hours')\n"
+                            "'when' set to the EXACT time label shown on screen (e.g. '1w', "
+                            "'3d', '2mo', '5h', '1yr'). Copy the label exactly as displayed. "
+                            "Do NOT paraphrase, summarize, or write 'recently' — use the literal text.\n"
                             "- any other useful fields you can identify\n\n"
                             "IGNORE: Do NOT include suggested/recommended profiles, "
                             "'People also viewed', 'People you may know' sections, "
@@ -843,9 +844,6 @@ def scrape_profile(url):
     # Inject company URLs into experience entries from the DOM-extracted links
     if company_links and "experience" in profile_data and profile_data["experience"]:
         _merge_urls_from_dom(profile_data["experience"], company_links)
-
-    if company_links:
-        profile_data["company_links"] = company_links
 
     # Add metadata
     profile_data["_source_url"] = url
