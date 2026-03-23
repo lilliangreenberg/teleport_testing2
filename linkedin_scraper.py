@@ -630,6 +630,212 @@ def download_logo(logo_url, slug):
 
 
 # ---------------------------------------------------------------------------
+#  Company People-tab helpers
+# ---------------------------------------------------------------------------
+
+def click_people_tab(session):
+    """Click the 'People' tab on a company LinkedIn page."""
+    js_code = """
+    (function() {
+        // Look for the People tab link in the company nav
+        var links = document.querySelectorAll('a');
+        for (var i = 0; i < links.length; i++) {
+            var text = links[i].textContent.trim().toLowerCase();
+            var href = links[i].href || '';
+            if ((text === 'people' || text.startsWith('people'))
+                && href.indexOf('/people') !== -1) {
+                links[i].click();
+                return 'clicked';
+            }
+        }
+        // Fallback: look for tab-like elements
+        var tabs = document.querySelectorAll('[role="tab"], .org-page-navigation__item a');
+        for (var i = 0; i < tabs.length; i++) {
+            if (tabs[i].textContent.trim().toLowerCase().includes('people')) {
+                tabs[i].click();
+                return 'clicked_tab';
+            }
+        }
+        return 'not_found';
+    })()
+    """
+    result = session.send("Runtime.evaluate", {
+        "expression": js_code,
+        "returnByValue": True,
+    })
+    status = result.get("result", {}).get("value", "not_found")
+    if status.startswith("clicked"):
+        print("Clicked People tab")
+        time.sleep(4)
+    else:
+        print("Warning: Could not find People tab, trying direct URL navigation")
+    return status
+
+
+def navigate_to_people_tab(session, company_url):
+    """Navigate directly to the People tab URL as a fallback."""
+    people_url = company_url.rstrip("/") + "/people/"
+    navigate_and_wait(session, people_url, wait_seconds=4)
+    print(f"Navigated to {people_url}")
+
+
+def extract_employee_links(session):
+    """Extract employee profile links from the People tab grid.
+
+    Returns a list of {profile_url, name, headline} dicts.
+    """
+    js_code = """
+    (function() {
+        var employees = [];
+        var seen = {};
+
+        // Employee cards on the People tab contain links to /in/ profiles
+        var allAnchors = document.querySelectorAll('a');
+        for (var i = 0; i < allAnchors.length; i++) {
+            var a = allAnchors[i];
+            var href = a.href || '';
+            if (href.indexOf('/in/') === -1) continue;
+
+            var clean = href.split('?')[0].replace(/\\/+$/, '');
+            if (seen[clean]) continue;
+            seen[clean] = true;
+
+            // Try to find the card container for this link
+            var card = a.closest('.org-people-profile-card__profile-info')
+                    || a.closest('[data-test-id]')
+                    || a.closest('.artdeco-entity-lockup')
+                    || a.parentElement;
+
+            var name = '';
+            var headline = '';
+
+            if (card) {
+                // Name is usually in the link text or a nearby title element
+                var nameEl = card.querySelector('.org-people-profile-card__profile-title')
+                          || card.querySelector('.artdeco-entity-lockup__title')
+                          || a;
+                name = nameEl ? nameEl.textContent.trim().replace(/\\s+/g, ' ') : '';
+
+                // Headline / subtitle
+                var headlineEl = card.querySelector('.org-people-profile-card__profile-subtitle')
+                              || card.querySelector('.artdeco-entity-lockup__subtitle')
+                              || card.querySelector('.lt-line-clamp--single-line');
+                headline = headlineEl ? headlineEl.textContent.trim().replace(/\\s+/g, ' ') : '';
+            } else {
+                name = a.textContent.trim().replace(/\\s+/g, ' ').substring(0, 100);
+            }
+
+            // Skip "LinkedIn Member" placeholder links (private profiles)
+            if (name.toLowerCase() === 'linkedin member') continue;
+
+            employees.push({
+                profile_url: clean,
+                name: name.substring(0, 120),
+                headline: headline.substring(0, 200)
+            });
+        }
+        return JSON.stringify(employees);
+    })()
+    """
+    result = session.send("Runtime.evaluate", {
+        "expression": js_code,
+        "returnByValue": True,
+    })
+    value = result.get("result", {}).get("value", "[]")
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+def scroll_people_section(session, scroll_pixels=600):
+    """Scroll down within the People tab to reveal more employee cards."""
+    js_code = f"window.scrollBy(0, {scroll_pixels}); window.scrollY;"
+    result = session.send("Runtime.evaluate", {
+        "expression": js_code,
+        "returnByValue": True,
+    })
+    scroll_pos = result.get("result", {}).get("value", 0)
+    time.sleep(2)
+    return scroll_pos
+
+
+def analyze_employees_for_ceo(screenshot_paths, employee_links, company_name):
+    """Use Claude's vision to identify CEO/founder from People tab screenshots.
+
+    Sends multiple screenshots along with the extracted employee links.
+    Claude identifies anyone whose headline indicates they are the CEO or
+    founder of the SPECIFIC company (not a different one).
+
+    Returns a list of {name, profile_url, headline, role} dicts for matches.
+    """
+    client = anthropic.Anthropic()
+
+    content = []
+    for i, path in enumerate(screenshot_paths):
+        image_data = base64.standard_b64encode(path.read_bytes()).decode("utf-8")
+        content.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/png",
+                "data": image_data,
+            },
+        })
+        content.append({
+            "type": "text",
+            "text": f"(Screenshot {i + 1} of {len(screenshot_paths)} from the People tab)",
+        })
+
+    links_json = json.dumps(employee_links, indent=2)
+
+    content.append({
+        "type": "text",
+        "text": (
+            f"These screenshots show employees of the company \"{company_name}\" "
+            f"from its LinkedIn People tab. The employees are shown in a grid of 3 per row.\n\n"
+            f"I also extracted these profile links from the page DOM:\n{links_json}\n\n"
+            f"Your task:\n"
+            f"1. Look at each employee's headline/title text visible in the screenshots.\n"
+            f"2. Identify anyone who is the CEO, Founder, Co-Founder, or Chief Executive "
+            f"Officer of \"{company_name}\" specifically.\n"
+            f"3. IMPORTANT: Some employees may have 'CEO' or 'Founder' in their headline "
+            f"but for a DIFFERENT company. You must verify the company name matches "
+            f"\"{company_name}\" (or is clearly referring to it).\n"
+            f"4. Match each identified person to their profile URL from the links list above "
+            f"using their name.\n\n"
+            f"Return JSON with a single key \"ceo_founders\" containing a list. "
+            f"Each entry should have:\n"
+            f"- name: the person's name\n"
+            f"- profile_url: their LinkedIn profile URL from the links list\n"
+            f"- headline: their headline as shown in the screenshot\n"
+            f"- role: the specific role (e.g. 'CEO', 'Founder', 'Co-Founder', 'CEO & Founder')\n\n"
+            f"If NO CEO or Founder of \"{company_name}\" is found, return:\n"
+            f"{{\"ceo_founders\": [], \"note\": \"No CEO/Founder of {company_name} found in visible employees\"}}\n\n"
+            f"Return ONLY valid JSON, no markdown fences or extra text."
+        ),
+    })
+
+    print(f"Analyzing {len(screenshot_paths)} People tab screenshots for CEO/Founder...")
+    message = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=2048,
+        messages=[{"role": "user", "content": content}],
+    )
+
+    response_text = message.content[0].text.strip()
+    if response_text.startswith("```"):
+        response_text = re.sub(r'^```(?:json)?\s*', '', response_text)
+        response_text = re.sub(r'\s*```$', '', response_text)
+
+    try:
+        return json.loads(response_text)
+    except json.JSONDecodeError:
+        print("Warning: Claude's CEO/founder response was not valid JSON.")
+        return {"ceo_founders": [], "raw_response": response_text}
+
+
+# ---------------------------------------------------------------------------
 #  Login flow
 # ---------------------------------------------------------------------------
 
@@ -930,26 +1136,100 @@ def scrape_person(url):
 def scrape_company(url):
     """Scrape a company LinkedIn page (/company/...).
 
-    TODO: Company-specific scraping logic to be implemented.
+    1. Take main page screenshot, extract data.
+    2. Navigate to People tab, scroll through employee grid in batches of 6.
+    3. Send employee screenshots to Claude to find CEO/Founder.
+    4. If not found in first 12, keep scrolling for more batches.
+    5. Save CEO/Founder LinkedIn URL(s) in the output JSON.
     """
+    MAX_PEOPLE_SCROLLS = 6  # Max additional scrolls beyond the initial 2 batches
     result = _open_and_validate(url)
     if result is None:
         return None
     proc, session, dom_data, slug = result
 
+    people_screenshots = []
+    all_employee_links = []
+
     try:
-        # Capture screenshot
+        # --- Step 1: Main company page screenshot ---
         screenshot_bytes = capture_screenshot(session)
         screenshot_path = OUTPUT_DIR / f"{slug}_screenshot.png"
         screenshot_path.write_bytes(screenshot_bytes)
         print(f"Screenshot saved to {screenshot_path}")
+
+        # --- Step 2: Navigate to People tab ---
+        click_status = click_people_tab(session)
+        if click_status == "not_found":
+            navigate_to_people_tab(session, url)
+
+        # --- Step 3: First batch of 6 employees (scroll down to see them) ---
+        scroll_people_section(session, scroll_pixels=400)
+        batch1_bytes = capture_screenshot(session)
+        batch1_path = OUTPUT_DIR / f"{slug}_people_batch1.png"
+        batch1_path.write_bytes(batch1_bytes)
+        people_screenshots.append(batch1_path)
+        print(f"People batch 1 screenshot saved to {batch1_path}")
+
+        # Extract employee links after first scroll
+        all_employee_links = extract_employee_links(session)
+        print(f"Found {len(all_employee_links)} employee links so far")
+
+        # --- Step 4: Second batch of 6 employees (scroll further) ---
+        scroll_people_section(session, scroll_pixels=600)
+        batch2_bytes = capture_screenshot(session)
+        batch2_path = OUTPUT_DIR / f"{slug}_people_batch2.png"
+        batch2_path.write_bytes(batch2_bytes)
+        people_screenshots.append(batch2_path)
+        print(f"People batch 2 screenshot saved to {batch2_path}")
+
+        # Re-extract links (may have loaded more via scroll)
+        all_employee_links = extract_employee_links(session)
+        print(f"Found {len(all_employee_links)} employee links total after 2 batches")
+
+        # --- Step 5: Analyze with Claude while Chrome is still open ---
+        company_name = dom_data.get("name", "")
+        ceo_result = analyze_employees_for_ceo(
+            people_screenshots, all_employee_links, company_name
+        )
+
+        ceo_founders = ceo_result.get("ceo_founders", [])
+
+        # --- Step 6: If no CEO/founder found, keep scrolling ---
+        extra_scrolls = 0
+        while not ceo_founders and extra_scrolls < MAX_PEOPLE_SCROLLS:
+            extra_scrolls += 1
+            print(f"No CEO/Founder found yet, scrolling further (attempt {extra_scrolls}/{MAX_PEOPLE_SCROLLS})...")
+
+            prev_count = len(all_employee_links)
+            scroll_people_section(session, scroll_pixels=600)
+
+            # Re-extract to check if new employees appeared
+            all_employee_links = extract_employee_links(session)
+            if len(all_employee_links) == prev_count:
+                print("No new employees loaded after scroll, stopping.")
+                break
+
+            batch_bytes = capture_screenshot(session)
+            batch_path = OUTPUT_DIR / f"{slug}_people_batch{len(people_screenshots) + 1}.png"
+            batch_path.write_bytes(batch_bytes)
+            people_screenshots.append(batch_path)
+            print(f"People batch {len(people_screenshots)} screenshot saved, "
+                  f"{len(all_employee_links)} employees found")
+
+            # Re-analyze with all screenshots so far
+            ceo_result = analyze_employees_for_ceo(
+                people_screenshots, all_employee_links, company_name
+            )
+            ceo_founders = ceo_result.get("ceo_founders", [])
 
         session.close()
 
     finally:
         kill_chrome(proc)
 
-    # Analyze screenshot with Claude
+    # --- Build the output JSON ---
+    # Analyze main page screenshot with Claude
     claude_data = analyze_with_claude(screenshot_path)
 
     # Merge: DOM data takes precedence, Claude fills in gaps
@@ -961,10 +1241,24 @@ def scrape_company(url):
     if logo_path:
         profile_data["_logo_file"] = logo_path
 
+    # Add CEO/Founder results
+    if ceo_founders:
+        profile_data["ceo_founders"] = ceo_founders
+        print(f"\nFound {len(ceo_founders)} CEO/Founder(s):")
+        for cf in ceo_founders:
+            print(f"  {cf.get('name')} ({cf.get('role')}) — {cf.get('profile_url')}")
+    else:
+        profile_data["ceo_founders"] = []
+        note = ceo_result.get("note", "No CEO/Founder found in visible employees")
+        profile_data["_ceo_search_note"] = note
+        print(f"\n{note}")
+
     profile_data["_type"] = "company"
     profile_data["_source_url"] = url
     profile_data["_scraped_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     profile_data["_screenshot"] = str(screenshot_path)
+    profile_data["_people_screenshots"] = [str(p) for p in people_screenshots]
+    profile_data["_employees_found"] = len(all_employee_links)
 
     # Save JSON
     json_path = OUTPUT_DIR / f"{slug}.json"
