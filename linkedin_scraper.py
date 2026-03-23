@@ -799,7 +799,7 @@ def scrape_profile(url):
         })
 
         # Navigate to the profile
-        navigate_and_wait(session, url, wait_seconds=2)
+        navigate_and_wait(session, url, wait_seconds=4)
 
         # Check if we hit a login wall
         login_issue = check_login_wall(session)
