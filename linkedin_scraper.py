@@ -690,72 +690,70 @@ def _merge_urls_from_dom(experience_entries, company_links):
     if not company_links:
         return
 
-    # First: strip any garbage Claude wrote (like the string "null")
+    # Strip ALL company_linkedin_url from Claude — DOM is the only source of truth
     for entry in experience_entries:
-        if not _is_valid_url(entry.get("company_linkedin_url")):
-            entry.pop("company_linkedin_url", None)
+        entry.pop("company_linkedin_url", None)
 
-    # Build lookups from the company links
+    # Build lookups from the DOM-extracted company links
     name_to_url = {}
     slug_to_url = {}
+    all_urls = []
     for cl in company_links:
         url = cl.get("company_linkedin_url", "")
         if not _is_valid_url(url):
             continue
-        # Name lookup
+        all_urls.append(url)
         name = cl.get("company_name", "").strip().lower()
         if name:
             name_to_url[name] = url
-        # Slug lookup: /company/google/ -> "google"
         slug = url.rstrip("/").split("/")[-1].lower()
         if slug:
             slug_to_url[slug] = url
 
-    for entry in experience_entries:
-        if _is_valid_url(entry.get("company_linkedin_url")):
-            continue
+    print(f"  URL merge: {len(experience_entries)} experience entries, "
+          f"{len(all_urls)} company URLs, {len(slug_to_url)} unique slugs")
 
+    for entry in experience_entries:
         comp = entry.get("company", "").strip().lower()
         if not comp:
+            print(f"    SKIP (no company name): {entry.get('title', '?')}")
             continue
 
         # 1. Exact name match
         if comp in name_to_url:
             entry["company_linkedin_url"] = name_to_url[comp]
+            print(f"    MATCH (exact name) '{comp}' -> {name_to_url[comp]}")
             continue
 
-        # 2. Substring match (either direction) on link text
+        # 2. Substring match on link text
         matched = False
         for dname, durl in name_to_url.items():
             if dname in comp or comp in dname:
                 entry["company_linkedin_url"] = durl
+                print(f"    MATCH (substring) '{comp}' ~ '{dname}' -> {durl}")
                 matched = True
                 break
         if matched:
             continue
 
-        # 3. Slug match — compare company name against URL slugs
-        #    e.g. "Meta Platforms" should match slug "meta-platforms"
+        # 3. Slug match
         comp_clean = comp.replace(",", "").replace(".", "").replace("&", "and")
-        comp_words = comp_clean.split()
-        comp_as_slug = "-".join(comp_words)  # "meta platforms" -> "meta-platforms"
+        comp_words = [w for w in comp_clean.split() if len(w) > 1]
+        comp_as_slug = "-".join(comp_words)
 
         for slug, surl in slug_to_url.items():
-            slug_parts = slug.split("-")
-            # Check: full slug match ("meta-platforms" == "meta-platforms")
+            slug_parts = [p for p in slug.split("-") if len(p) > 1]
             if comp_as_slug == slug:
                 entry["company_linkedin_url"] = surl
                 matched = True
                 break
-            # Check: any company word is the slug or starts the slug
             for word in comp_words:
-                if word == slug or slug.startswith(word + "-") or slug.startswith(word):
+                if word == slug or slug.startswith(word):
                     entry["company_linkedin_url"] = surl
                     matched = True
                     break
             if matched:
                 break
-            # Check: any slug part matches a company word
             for sp in slug_parts:
                 if sp in comp_words:
                     entry["company_linkedin_url"] = surl
@@ -763,6 +761,11 @@ def _merge_urls_from_dom(experience_entries, company_links):
                     break
             if matched:
                 break
+
+        if matched:
+            print(f"    MATCH (slug) '{comp}' -> {entry['company_linkedin_url']}")
+        else:
+            print(f"    MISS '{comp}' — available slugs: {list(slug_to_url.keys())}")
 
 
 # ---------------------------------------------------------------------------
