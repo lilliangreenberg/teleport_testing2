@@ -750,6 +750,50 @@ def extract_employee_links(session):
         return []
 
 
+def extract_associated_members_count(session):
+    """Extract the exact 'N associated members' count from the People tab.
+
+    LinkedIn shows e.g. '40,973 associated members' at the top of the People tab.
+    Returns the integer count, or None if not found.
+    """
+    js_code = """
+    (function() {
+        // Look for text matching "N,NNN associated members"
+        var headings = document.querySelectorAll('h2, h1, span, div');
+        for (var i = 0; i < headings.length; i++) {
+            var text = headings[i].textContent.trim();
+            var match = text.match(/([\\d,]+)\\s+associated\\s+members/i);
+            if (match) {
+                return match[1];
+            }
+        }
+        // Fallback: try "N employees" pattern
+        for (var i = 0; i < headings.length; i++) {
+            var text = headings[i].textContent.trim();
+            var match = text.match(/^([\\d,]+)\\s+employees?$/i);
+            if (match) {
+                return match[1];
+            }
+        }
+        return null;
+    })()
+    """
+    result = session.send("Runtime.evaluate", {
+        "expression": js_code,
+        "returnByValue": True,
+    })
+    value = result.get("result", {}).get("value")
+    if value:
+        try:
+            count = int(value.replace(",", ""))
+            print(f"Extracted exact employee count from People tab: {count:,}")
+            return count
+        except (ValueError, TypeError):
+            pass
+    print("Warning: Could not extract associated members count from People tab")
+    return None
+
+
 def scroll_people_section(session, scroll_pixels=600):
     """Scroll down within the People tab to reveal more employee cards."""
     js_code = f"window.scrollBy(0, {scroll_pixels}); window.scrollY;"
@@ -1165,6 +1209,9 @@ def scrape_company(url):
         if click_status == "not_found":
             navigate_to_people_tab(session, url)
 
+        # --- Step 2b: Extract exact employee count from People tab header ---
+        exact_employee_count = extract_associated_members_count(session)
+
         # --- Step 3: First batch of 6 employees (scroll down to see them) ---
         scroll_people_section(session, scroll_pixels=400)
         batch1_bytes = capture_screenshot(session)
@@ -1263,12 +1310,15 @@ def scrape_company(url):
                      "pages_people_also_viewed", "affiliated_pages"):
         profile_data.pop(unwanted, None)
 
+    # Override rough employee count with exact number from People tab
+    if exact_employee_count is not None:
+        profile_data["employees"] = exact_employee_count
+
     profile_data["_type"] = "company"
     profile_data["_source_url"] = url
     profile_data["_scraped_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     profile_data["_screenshot"] = str(screenshot_path)
     profile_data["_people_screenshots"] = [str(p) for p in people_screenshots]
-    profile_data["_employees_found"] = len(all_employee_links)
 
     # Save JSON
     json_path = OUTPUT_DIR / f"{slug}.json"
