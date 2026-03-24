@@ -488,12 +488,10 @@ def analyze_with_claude(screenshot_path):
                             "- headline: the headline/tagline\n"
                             "- company: current company name (for person profiles)\n"
                             "- title: current job title (for person profiles)\n"
-                            "- location: geographic location\n"
                             "- industry: industry or sector\n"
                             "- about: summary/about text if visible\n"
                             "- connections: connection/follower count\n"
                             "- experience: list of visible experience entries\n"
-                            "- education: list of visible education entries\n"
                             "- website: any website URLs shown\n"
                             "- profile_url: the LinkedIn URL if visible\n"
                             "- recent_activity: list of recent activity entries, each with "
@@ -502,7 +500,8 @@ def analyze_with_claude(screenshot_path):
                             "'3d', '2mo', '5h', '1yr'). Copy the label exactly as displayed. "
                             "Do NOT paraphrase, summarize, or write 'recently' — use the literal text.\n"
                             "- any other useful fields you can identify\n\n"
-                            "IGNORE: Do NOT include suggested/recommended profiles, "
+                            "IGNORE: Do NOT include location, education, chosen/featured "
+                            "quotes, suggested/recommended profiles, "
                             "'People also viewed', 'People you may know' sections, "
                             "messaging availability status, posts_count, or counts of "
                             "comments/videos/images available.\n\n"
@@ -1113,6 +1112,11 @@ def scrape_person(url):
     if company_links and "experience" in profile_data and profile_data["experience"]:
         _merge_urls_from_dom(profile_data["experience"], company_links)
 
+    # Strip fields we don't care about
+    for unwanted in ("location", "education", "quote", "chosen_quote",
+                     "featured_quote", "city", "country", "region"):
+        profile_data.pop(unwanted, None)
+
     profile_data["_type"] = "person"
     profile_data["_source_url"] = url
     profile_data["_scraped_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -1252,6 +1256,11 @@ def scrape_company(url):
         note = ceo_result.get("note", "No CEO/Founder found in visible employees")
         profile_data["_ceo_search_note"] = note
         print(f"\n{note}")
+
+    # Strip fields we don't care about
+    for unwanted in ("location", "education", "quote", "chosen_quote",
+                     "featured_quote", "city", "country", "region"):
+        profile_data.pop(unwanted, None)
 
     profile_data["_type"] = "company"
     profile_data["_source_url"] = url
